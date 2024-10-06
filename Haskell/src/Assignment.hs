@@ -10,6 +10,7 @@ import          Control.Applicative (Alternative (..))
 
 data ADT =
   Empty |
+  ParseErrorADT ParseError |
   URL ADT ADT |
   Image ADT ADT |
   StringADT String |
@@ -26,10 +27,10 @@ data ADT =
   FootnoteReference ADT ADT |
   FreeText [ADT] |
   Header Int ADT |
-  Code ADT |
-  OrderedList [(Int, ADT)] |
+  BlockQuote ADT |
+  CodeBlock (Maybe String) String |
+  List [ADT] |
   Table [[ADT]]
-
 
   deriving (Show, Eq)
 
@@ -40,7 +41,45 @@ getTime :: IO String
 getTime = formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S" <$> getCurrentTime
 
 convertADTHTML :: ADT -> String
-convertADTHTML Empty = "IMPLEMENT_THIS"
+convertADTHTML Empty = ""
+convertADTHTML (Italic content) = "<em>" ++ convertADTHTML content ++ "</em>"
+convertADTHTML (Bold content) = "<strong>" ++ convertADTHTML content ++ "</strong>"
+convertADTHTML (Strikethrough content) = "<del>" ++ convertADTHTML content ++ "/<del>"
+convertADTHTML (Link text url) = "<a href=\"" ++ extractString url ++ "\">" ++ convertADTHTML text ++ "</a>"
+convertADTHTML (InlineCode content) = "<code>" ++ convertADTHTML content ++ "</code>"
+convertADTHTML (Footnote content) = 
+  let footnoteNumber = extractString content
+  in "<sup><a id=\"fn" ++ footnoteNumber ++ "ref\" href=\"#fn" ++ footnoteNumber ++ "\">" ++ footnoteNumber ++ "</a></sup>"
+convertADTHTML (StringADT s) = s
+convertADTHTML (Image altText (URL url (QuoteADT caption))) =
+  "<img src=\"" ++ extractString url ++  "\" alt=\"" ++ convertADTHTML altText ++ "\" title=\"" ++ convertADTHTML caption ++ "\">"
+convertADTHTML (FootnoteReference (Footnote number) content) =
+  let footnoteNumber = extractString number
+      footnoteContent = extractString content
+  in "<p id=\"fn" ++ footnoteNumber ++ "\">" ++ footnoteContent ++ "</p>"
+convertADTHTML (FreeText contents) =
+  concatMap (\content -> "<p>" ++ convertADTHTML content ++ "</p>") contents
+convertADTHTML (Header level content) =
+  if level >= 1 && level <= 6
+    then "<h" ++ show level ++ ">" ++ convertADTHTML content ++ "</h" ++ show level ++ ">"
+    else ""
+convertADTHTML (BlockQuote content) =
+  "<blockquote>" ++ concatMap (\line -> "<p>" ++ convertADTHTML line ++ "</p>") (extractLines content) ++ "</blockquote>"
+convertADTHTML (CodeBlock (Just lang) code) = 
+  "<pre><code class=\"language-" ++ lang ++ "\">" ++ code ++ "</code></pre>"
+convertADTHTML (CodeBlock Nothing code) = 
+  "<pre><code>" ++ code ++ "</code></pre>"
+convertADTHTML _ = ""
+
+-- helper function to extract a string
+extractString :: ADT -> String
+extractString (StringADT s) = s
+extractString _ = ""
+
+-- helper function to extract lines from freetext
+extractLines :: ADT -> [ADT]
+extractLines (FreeText contents) = contents
+extractLines _ = []
 
 --------------------------------
 -- Parse Modifiers
@@ -52,16 +91,6 @@ parseSquareBrackets = SquareBrackets <$> (charTok '[' *> parseText ']' <* charTo
 parseRoundBrackets :: Parser ADT
 parseRoundBrackets = RoundBrackets <$> (charTok '(' *> parseText ')' <* charTok ')')
 
-parsePlainText :: Parser ADT
-parsePlainText = do
-  spaces
-  content <- many1 (noneof "|")
-  spaces
-  return $ StringADT content
-
-parseModifier :: Parser ADT
-parseModifier = Modifier <$> (spaces *> (parseItalic <|> parseBold <|> parseStrikethrough <|> parseLink <|> parseInlineCode <|> parseFootnote <|> parseImage <|> parseFootnoteReference) <* spaces)
-
 parseItalic :: Parser ADT
 parseItalic = Italic <$> (charTok '_' *> parseText '_' <* charTok '_')
 
@@ -72,10 +101,13 @@ parseStrikethrough :: Parser ADT
 parseStrikethrough = Strikethrough <$> (stringTok "~~" *> parseText '~' <* stringTok "~~")
 
 parseText :: Char -> Parser ADT
-parseText a =  StringADT <$> (spaces *> some (isNot a) <* spaces )
+parseText a = (StringADT <$> (spaces *> some (noneof ['*', '~', '_', '[', '`']) <* spaces ))
 
-parseNonModifier :: Parser ADT
-parseNonModifier = StringADT <$> (spaces *> some (noneof(['_', '*', '[', ']', '(', ')', '`', '!', '^', ':'])) <* spaces)
+parseModifier :: Parser ADT
+parseModifier = Modifier <$> (spaces *> (parseItalic <|> parseBold <|> parseStrikethrough <|> parseLink <|> parseInlineCode <|> parseFootnote) <* spaces)
+
+-- parseNonModifier :: Parser ADT
+-- parseNonModifier = parseText (noneof ['*', '~', '_', '[', '`'])
 
 parseQuoteADT :: Parser ADT
 parseQuoteADT = QuoteADT <$> (charTok '\"' *> parseText '\"' <* charTok '\"')
@@ -89,7 +121,6 @@ parseLink = do
   linkUrl <- parseText ')'
   _ <- charTok ')'  -- Consume the closing parenthesis
   return (Link linkText linkUrl)  -- Construct the Link with the parsed text and URL
-  
 
 parseInlineCode :: Parser ADT
 parseInlineCode = InlineCode <$> (stringTok "`" *> parseText '`' <* stringTok "`")
@@ -129,114 +160,116 @@ parseImage = do
 parseFootnoteReference :: Parser ADT
 parseFootnoteReference = do
   footnote <- parseFootnote
-  is ':'  -- Consume the opening bracket
+  is ':'
   spaces
   ref <- parseText '\n'
   return (FootnoteReference footnote ref)
 
-
-
-parseFreeText :: Parser ADT
-parseFreeText = FreeText <$> (some (spaces *> (parseModifier <|> parseNonModifier) <* spaces))
-
--- Helper to parse a sequence of hashes (i.e., # for Heading level 1 to 6)
-parseHashHeader :: Parser Int
-parseHashHeader = do
-  hashes <- many1 (char '#')   -- Parse one or more '#' characters
-  spaces                        -- Require at least one space after the hashes
-  let level = length hashes    -- The number of '#' represents the heading level
-  if level > 6 then fail "Invalid header level" else return level
+parseHashHeaders :: Parser ADT
+parseHashHeaders = do
+  hashes <- some (is '#')   -- Parse one or more '#' characters
+  is ' '               -- Require at least one space after the hashes
+  spaces
+  headerText <- parseModifier <|> parseText '\n'
+  if length hashes > 6
+    then return (ParseErrorADT (UnexpectedChar '#')) -- Fail if there are more than 6 hashes
+  else
+    return (Header (length hashes) headerText)
 
 -- Parse alternative heading (=== for level 1, --- for level 2)
-parseAltHeader :: Parser Int
-parseAltHeader = do
-  headingText <- many1 anyChar   -- Parse the text line (content of the heading)
-  newline
-  altLine <- many1 (oneOf "= -") -- Parse the alternative line (either === or ---)
-  let level = if head altLine == '=' then 1 else 2
-  return level
+parseAltHeader :: Char -> Parser ADT
+parseAltHeader a = do
+  text <- parseModifier <|> parseText '\n'
+  (is a)
+  some (is a)
+  return (case a of 
+    '=' -> (Header 1 text)
+    '-' -> (Header 2 text)
+    _ -> ParseErrorADT(UnexpectedChar a))
 
--- Combine both hash-based and alternative header parsers
-parseHeaderLevel :: Parser Int
-parseHeaderLevel = try parseHashHeader <|> parseAltHeader
-
--- Parser for the content of the heading (handling modifiers, brackets, quotes, etc.)
-parseHeaderContent :: Parser ADT
-parseHeaderContent = FreeText <$> many1 (parseModifier <|> parseSquareBrackets <|> parseRoundBrackets <|> parseQuoteADT <|> parseNonModifier)
-
--- Top-level parser for a heading
 parseHeader :: Parser ADT
-parseHeader = do
-  level <- parseHeaderLevel     -- Parse the header level (1-6)
-  content <- parseHeaderContent -- Parse the content of the header
-  return $ Header level content -- Return the Header ADT
+parseHeader = parseHashHeaders <|> parseAltHeader '=' <|> parseAltHeader '-' 
 
--- parseHeader1 :: a
+parseBlockQuote :: Parser ADT
+parseBlockQuote = do
+  spaces
+  _ <- charTok '>'
+  spaces            
+  blockContent <- some (parseModifier <|> parseText '\n') 
+  -- Handle multi-line blockquotes by recursively parsing lines that start with '>'
+  moreContent <- many (charTok '>' *> spaces *> (parseModifier <|> parseText '\n'))
+  return $ BlockQuote (FreeText (blockContent ++ moreContent))
 
--- parseHeader1 = undefined
--- parseHeader :: a
--- parseHeader = Header <$> ((parseHeader1 <|> parseHeader2) *> parseModifier)
+-- | Parser for newline character
+newline :: Parser Char
+newline = satisfy (== '\n')  -- Use satisfy to match the newline character
 
+-- | Parse a Markdown code block, starting with ``` and optionally followed by a language identifier.
 parseCodeBlock :: Parser ADT
 parseCodeBlock = do
-  _ <- string "```"
-  lang <- optionMaybe (many1 alphaNum)
-  newline
-  codeLines <- manyTill anyChar (try (newline >> string "```"))
-  return $ Code (StringADT codeLines)
+  -- Parse optional spaces before the opening backticks
+  spaces
+  -- Parse the opening backticks (```)
+  _ <- stringTok "```"
+  
+  -- Attempt to parse the language identifier, which may be absent
+  lang <- many (noneof "\n") <* newline  -- Use the newline parser
 
--- Parser for a list item, which starts with a number followed by a period and a space
-parseListItem :: Parser (Int, ADT)
-parseListItem = do
-  num <- read <$> many1 digit
-  _ <- char '.'
-  _ <- space
-  content <- many1 (parseBold <|> parseItalic <|> parsePlainText)
-  return (num, FreeText content)
+  -- Parse the content of the code block (stopping at the closing backticks)
+  codeLines <- many (satisfy (/= '`')) <* endCodeBlock
+  
+  -- Return the content as a FreeText ADT, including the language identifier if it was present.
+  return $ FreeText [StringADT ("Language: " ++ lang ++ "\n" ++ codeLines)]  -- Include language
 
--- Parser for sublist items (which are indented with exactly 4 spaces)
-parseSubListItem :: Parser (Int, ADT)
+-- | Parse the closing backticks of a code block (```), followed by optional spaces and a newline.
+endCodeBlock :: Parser String
+endCodeBlock = stringTok "```" <* spaces <* newline  -- Use the newline parser
+
+-- Parser for a single ordered list item
+parseOrderedListItem :: Parser ADT
+parseOrderedListItem = do
+    num <- some digit <* satisfy (== '.')  -- Read the number before the dot
+    _ <- spaces  -- At least one whitespace
+    textADT <- parseModifier <|> parseText '\n'  -- Text may include modifiers
+    let text = case textADT of
+                  StringADT s -> s  -- Extract the string from StringADT
+                  _ -> ""  -- Default to empty if it's not StringADT
+    return $ StringADT (num ++ ". " ++ text)  -- Combine number and text into StringADT
+
+-- Parser for a sublist item
+parseSubListItem :: Parser ADT
 parseSubListItem = do
-  _ <- count 4 (char ' ')      -- Exactly 4 spaces before sublist items
-  parseListItem
+    _ <- stringTok "    "  -- Exactly 4 spaces for sublist items
+    item <- parseOrderedListItem  -- Parse the ordered list item as a sublist item
+    return item
 
+-- Parser for an ordered list that allows sublists
 parseOrderedList :: Parser ADT
 parseOrderedList = do
-  items <- some parseListItem
-  subItems <- many (try parseSubListItem)
-  let allItems = items ++ subItems
-  return $ OrderedList allItems
+    items <- some (parseOrderedListItem <* newline)  -- Parse at least one ordered list item
+    return $ List items  -- Return as a List ADT
 
-parseTableCell :: Parser ADT
-parseTableCell = try parseBold <|> try parseItalic <|> parsePlainText
-
+-- Parser for a list that can include sublists
+parseListWithSubLists :: Parser ADT
+parseListWithSubLists = do
+    items <- many (parseSubListItem <|> parseOrderedListItem <* newline)
+    return $ List items
+    
+-- Function to parse a single row of the table
 parseTableRow :: Parser [ADT]
 parseTableRow = do
-  _ <- char '|'               -- Start of the row
-  cells <- sepBy parseTableCell (char '|')
-  _ <- char '|'               -- End of the row
-  newline
-  return cells
+    _ <- spaces
+    firstItem <- parseModifier <|> parseText '\n'  -- Parse first item
+    restItems <- many (charTok '|' *> spaces *> (parseModifier <|> parseText '\n'))  -- Parse rest of the items
+    _ <- spaces
+    return (firstItem : restItems)
 
-parseHeaderSeparator :: Int -> Parser ()
-parseHeaderSeparator numColumns = do
-  _ <- char '|'
-  sepBy (count 3 (char '-') *> many (char '-')) (char '|') -- At least 3 dashes per column
-  _ <- char '|'
-  newline
-  return ()
-
+-- Function to parse the entire table
 parseTable :: Parser ADT
 parseTable = do
-  header <- parseTableRow
-  let numColumns = length header
-  _ <- parseHeaderSeparator numColumns
-  rows <- many1 (parseTableRowWithColumns numColumns)
-  return $ Table (header : rows)
-
-parseTableRowWithColumns :: Int -> Parser [ADT]
-parseTableRowWithColumns numColumns = do
-  row <- parseTableRow
-  if length row == numColumns
-    then return row
-    else fail "Row has a different number of columns than the header."
+    headerRow <- parseTableRow
+    _ <- charTok '\n'
+    separatorRow <- parseTableRow
+    _ <- charTok '\n'
+    contentRows <- many parseTableRow
+    return (Table (headerRow : separatorRow : contentRows))
