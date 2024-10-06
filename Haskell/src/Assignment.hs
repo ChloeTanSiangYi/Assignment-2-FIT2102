@@ -193,8 +193,20 @@ parseFootnoteReference = do
   ref <- parseText '\n'
   return (FootnoteReference footnote ref)
 
+parseFreeText :: Parser ADT
+parseFreeText = do
+  contents <- many (parseModifier <|> parseText '\n')
+  return $ FreeText (filterEmptyLines contents)
+
+-- | Helper function to filter out empty lines from FreeText contents
+filterEmptyLines :: [ADT] -> [ADT]
+filterEmptyLines = filter (\x -> case x of
+                                    StringADT s -> not (all (== ' ') s || null s)  -- Remove empty lines
+                                    _ -> True)
+
 parseHashHeaders :: Parser ADT
 parseHashHeaders = do
+  spaces
   hashes <- some (is '#')   -- Parse one or more '#' characters
   is ' '               -- Require at least one space after the hashes
   spaces
