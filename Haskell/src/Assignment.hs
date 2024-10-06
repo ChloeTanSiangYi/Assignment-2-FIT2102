@@ -42,6 +42,7 @@ getTime = formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S" <$> getCurrentTime
 
 convertADTHTML :: ADT -> String
 convertADTHTML Empty = ""
+-- text modifiers
 convertADTHTML (Italic content) = "<em>" ++ convertADTHTML content ++ "</em>"
 convertADTHTML (Bold content) = "<strong>" ++ convertADTHTML content ++ "</strong>"
 convertADTHTML (Strikethrough content) = "<del>" ++ convertADTHTML content ++ "/<del>"
@@ -51,24 +52,36 @@ convertADTHTML (Footnote content) =
   let footnoteNumber = extractString content
   in "<sup><a id=\"fn" ++ footnoteNumber ++ "ref\" href=\"#fn" ++ footnoteNumber ++ "\">" ++ footnoteNumber ++ "</a></sup>"
 convertADTHTML (StringADT s) = s
+-- images
 convertADTHTML (Image altText (URL url (QuoteADT caption))) =
   "<img src=\"" ++ extractString url ++  "\" alt=\"" ++ convertADTHTML altText ++ "\" title=\"" ++ convertADTHTML caption ++ "\">"
+-- footnote references
 convertADTHTML (FootnoteReference (Footnote number) content) =
   let footnoteNumber = extractString number
       footnoteContent = extractString content
   in "<p id=\"fn" ++ footnoteNumber ++ "\">" ++ footnoteContent ++ "</p>"
+-- free text
 convertADTHTML (FreeText contents) =
   concatMap (\content -> "<p>" ++ convertADTHTML content ++ "</p>") contents
+-- headings
 convertADTHTML (Header level content) =
   if level >= 1 && level <= 6
     then "<h" ++ show level ++ ">" ++ convertADTHTML content ++ "</h" ++ show level ++ ">"
     else ""
+-- block quote
 convertADTHTML (BlockQuote content) =
   "<blockquote>" ++ concatMap (\line -> "<p>" ++ convertADTHTML line ++ "</p>") (extractLines content) ++ "</blockquote>"
+-- code
 convertADTHTML (CodeBlock (Just lang) code) = 
   "<pre><code class=\"language-" ++ lang ++ "\">" ++ code ++ "</code></pre>"
 convertADTHTML (CodeBlock Nothing code) = 
   "<pre><code>" ++ code ++ "</code></pre>"
+-- ordered lists
+convertADTHTML (List items) = "<ol>" ++ convertListItems items ++ "</ol>"
+-- tables
+convertADTHTML (Table (header:rows)) =
+  "<table><thead><tr>" ++ convertHeaderRow header ++ "</tr></thead>" ++
+  "<tbody>" ++ concatMap (\row -> "<tr>" ++ convertRow row ++ "</tr>") rows ++ "</tbody></table>"
 convertADTHTML _ = ""
 
 -- helper function to extract a string
@@ -80,6 +93,21 @@ extractString _ = ""
 extractLines :: ADT -> [ADT]
 extractLines (FreeText contents) = contents
 extractLines _ = []
+
+-- helper function to convert list items
+convertListItems :: [ADT] -> String
+convertListItems [] = ""
+convertListItems (x:xs) = "<li>" ++ convertADTHTML x ++ "</li>" ++ convertListItems xs
+
+-- helper function to convert a row
+convertRow :: [ADT] -> String
+convertRow [] = ""
+convertRow (x:xs) = "<td>" ++ convertADTHTML x ++ "</td>" ++ convertRow xs
+
+-- helper function to convert a header row
+convertHeaderRow :: [ADT] -> String
+convertHeaderRow [] = ""
+convertHeaderRow (x:xs) = "<th>" ++ convertADTHTML x ++ "</th>" ++ convertHeaderRow xs
 
 --------------------------------
 -- Parse Modifiers
