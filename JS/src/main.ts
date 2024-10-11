@@ -19,6 +19,8 @@ const markdownInput = document.getElementById(
     "markdown-input",
 ) as HTMLTextAreaElement;
 const checkbox = document.querySelector('input[name="checkbox"]')!;
+const titleInput = document.getElementById("title-input") as HTMLInputElement;
+const saveButton = document.getElementById("save-button") as HTMLButtonElement;
 
 type Action = (_: State) => State;
 
@@ -46,8 +48,37 @@ const checkboxStream$: Observable<Action> = fromEvent(checkbox, "change").pipe(
     map((value) => (s) => ({ ...s, renderHTML: value })),
 );
 
+const title$: Observable<Action> = fromEvent(titleInput, "input").pipe(
+    map((event) => (event.target as HTMLInputElement).value),
+    map((value) => (s) => ({ ...s, title: value }))
+);
+
+const save$: Observable<Action> = fromEvent(saveButton, "click").pipe(
+    map(() => (s) => ({ ...s, save: true }))
+);
+
 function getHTML(s: State): Observable<State> {
-    // Get the HTML as a stream
+    if (s.save) {
+        return ajax<{ success: boolean }>({
+            url: "/api/saveHTML",
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                html: s.HTML,
+                title: s.title,
+                // timestamp: getTime(), -- fix later
+            }),
+        }).pipe(
+            map(() => {
+                return { ...s, save: false }; // Reset the save flag
+            }),
+            first(),
+        );
+    }
+
+    // Normal HTML conversion flow
     return ajax<{ html: string }>({
         url: "/api/convertMD",
         method: "POST",
@@ -56,7 +87,7 @@ function getHTML(s: State): Observable<State> {
         },
         body: s.markdown,
     }).pipe(
-        map((response) => response.response), // Extracting the response data
+        map((response) => response.response),
         map((data) => {
             return {
                 ...s,
@@ -72,11 +103,12 @@ const initialState: State = {
     HTML: "",
     renderHTML: true,
     save: false,
+    title: "Converted HTML",
 };
 
 function main() {
     // Subscribe to the input Observable to listen for changes
-    const subscription = merge(input$, checkboxStream$)
+    const subscription = merge(input$, checkboxStream$, title$, save$)
         .pipe(
             map((reducer: Action) => {
                 // Reset Some variables in the state in every tick
@@ -108,6 +140,8 @@ function main() {
                     htmlOutput.textContent = value.HTML;
                 }
             }
+            // Update the page title
+            document.title = value.title || "Converted HTML";
         });
 }
 if (typeof window !== "undefined") {
