@@ -1,5 +1,5 @@
-import { fromEvent, merge } from "rxjs";
-import { map, mergeScan, first } from "rxjs/operators";
+import { fromEvent, merge, timer } from "rxjs";
+import { map, mergeScan, first, switchMap } from "rxjs/operators";
 import { ajax } from "rxjs/ajax";
 import { type Observable } from "rxjs";
 import { State } from "./types";
@@ -15,12 +15,17 @@ hljs.registerLanguage("javascript", javascript);
 hljs.registerLanguage("python", python);
 hljs.registerLanguage("haskell", haskell);
 
-const markdownInput = document.getElementById(
-    "markdown-input",
-) as HTMLTextAreaElement;
+// Grab HTML elements
+const markdownInput = document.getElementById("markdown-input") as HTMLTextAreaElement;
 const checkbox = document.querySelector('input[name="checkbox"]')!;
 const titleInput = document.getElementById("title-input") as HTMLInputElement;
 const saveButton = document.getElementById("save-button") as HTMLButtonElement;
+const darkModeToggle = document.getElementById("dark-mode-toggle") as HTMLInputElement;
+
+// Ensure to reference header and section elements
+const header = document.querySelector("header") as HTMLElement;
+const sections = document.querySelectorAll("section") as NodeListOf<HTMLElement>;
+const htmlOutput = document.getElementById("html-output") as HTMLElement;
 
 type Action = (_: State) => State;
 
@@ -56,6 +61,26 @@ const title$: Observable<Action> = fromEvent(titleInput, "input").pipe(
 const save$: Observable<Action> = fromEvent(saveButton, "click").pipe(
     map(() => (s) => ({ ...s, save: true }))
 );
+
+const darkMode$: Observable<Action> = fromEvent(darkModeToggle, "change").pipe(
+    map((event) => (event.target as HTMLInputElement).checked),
+    map((isDarkMode) => (s) => ({ ...s, darkMode: isDarkMode }))
+);
+
+// Function to calculate word and character counts
+const countMetrics$ = fromEvent(markdownInput, "input").pipe(
+    map(() => markdownInput.value),
+    map((markdown) => ({
+        wordCount: markdown.split(/\s+/).filter(Boolean).length,
+        charCount: markdown.length,
+    }))
+);
+
+// Subscribe to update word and character counts in UI
+countMetrics$.subscribe(({ wordCount, charCount }) => {
+    document.getElementById("word-count")!.textContent = `Word Count: ${wordCount}`;
+    document.getElementById("char-count")!.textContent = `Character Count: ${charCount}`;
+});
 
 function getHTML(s: State): Observable<State> {
     if (s.save) {
@@ -104,11 +129,12 @@ const initialState: State = {
     renderHTML: true,
     save: false,
     title: "Converted HTML",
+    darkMode: false,
 };
 
 function main() {
     // Subscribe to the input Observable to listen for changes
-    const subscription = merge(input$, checkboxStream$, title$, save$)
+    const subscription = merge(input$, checkboxStream$, title$, save$, darkMode$)
         .pipe(
             map((reducer: Action) => {
                 // Reset Some variables in the state in every tick
@@ -123,7 +149,6 @@ function main() {
             }, initialState),
         )
         .subscribe((value) => {
-            const htmlOutput = document.getElementById("html-output");
             if (htmlOutput) {
                 htmlOutput.innerHTML = "";
                 htmlOutput.textContent = "";
@@ -142,8 +167,22 @@ function main() {
             }
             // Update the page title
             document.title = value.title || "Converted HTML";
+
+            // handle dark mode
+            if (value.darkMode) {
+                document.body.classList.add("dark-mode");
+                header.classList.add("dark-mode");
+                sections.forEach(section => section.classList.add("dark-mode"));
+                htmlOutput.classList.add("dark-mode");
+            } else {
+                document.body.classList.remove("dark-mode");
+                header.classList.remove("dark-mode");
+                sections.forEach(section => section.classList.remove("dark-mode"));
+                htmlOutput.classList.remove("dark-mode");
+            }
         });
 }
+
 if (typeof window !== "undefined") {
     window.onload = function () {
         main();

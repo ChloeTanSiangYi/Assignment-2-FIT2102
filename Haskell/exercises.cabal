@@ -22,6 +22,7 @@ source-repository head
 library
   exposed-modules:
       Assignment
+      AssignmentTest
       Instances
       Parser
   other-modules:
